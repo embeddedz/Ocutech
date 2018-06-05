@@ -277,8 +277,11 @@ byte saturated_pixels[8] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 bool pixel_validity[8][8] = {0};
 
 float avgDCS0, avgDCS1, avgDCS2, avgDCS3, avgDCS4;
-float distance_avg,last_dist,arctan,dist_ravg[5] = {0};
+
+#define RUN_AVG_LEN 3
+float distance_avg,last_dist,arctan,dist_ravg[RUN_AVG_LEN];
 char dist_pt;
+bool infinity_flag;
 /* temperature polynoms */
 const int32_t epc610_temp_dist_off = 1430;
 const uint8_t epc610_temp_fract_bits[3] = { 22, 22, 12 };
@@ -291,6 +294,7 @@ uint32_t TEMPRT=0;
 //float distance[8][8];
 float quality[8][8];
 float avg_quality;
+unsigned char quality_thres=70;
 
 byte num_dcs_frames;
 bool measure_type;
@@ -767,7 +771,7 @@ float comp_temp(int temp,float dist) {
 
 //!version 2
 float comp_temp(int temp,float dist) {
-	float dist_temp,offset_drift,p2=6.57;//6.57, for silver case, 6.43
+	float dist_temp,offset_drift,p2=6.61;//others:6.57, num 3: 6.61,	silver case: 6.43
 	
 	//if(dist>6)
 	//	dist = 6;
@@ -1027,11 +1031,11 @@ QUALITY_INDICATOR evalQuality() {
   avg_quality = 0;
   for(int i=0; i<8; i++) {
     for(int j=0; j<8; j++) {
-      if (quality[i][j] < 70) {
+      if (quality[i][j] < quality_thres) {
         low++;
         pixel_validity[i][j] = 0;
       }
-      else if ((quality[i][j] > 70) && (quality[i][j] <= 100)) {
+      else if ((quality[i][j] > quality_thres) && (quality[i][j] <= 100)) {
         sufficient++;
         pixel_validity[i][j] = 1;
       }
@@ -1051,9 +1055,11 @@ QUALITY_INDICATOR evalQuality() {
   
   avg_quality /= 64;
 
+/*
   Serial.print("avg_quality:");
   Serial.print(avg_quality);
-  Serial.print("\n");
+  Serial.print("\n");*/
+  
   //
   //Serial.print(", sufficient = ");
   //Serial.print(sufficient);
@@ -1351,7 +1357,6 @@ void stepper_move_to(int pos, bool force) {
 		mv_thres = MV_TH500;
 	else 
 		mv_thres = MV_TH;
-	delay(50);
   if(pos <= MIN_POS)
   {
   	DEBUG_PRINT_STEPPER("Move input out of range.\n");
@@ -1433,12 +1438,17 @@ void stepper_move_to(int pos, bool force) {
   return;
 }
 
-void stepper_move_with_keys() {
-  int incomingByte = 0;
-  int stepper_desired_position = -1;
-  if(Serial.available() > 0) {
-    incomingByte = Serial.read();
-
+void usr_input_serial() {
+  static char usr_data[20]={0};
+  char *tok;
+  unsigned char value;
+  static unsigned char data_pt=0;
+  
+  while(Serial.available() > 0) {
+    usr_data[data_pt] = Serial.read();
+    Serial.print(usr_data[data_pt++]); 
+    data_pt %= 20;   
+	/*
     // 'z' key pressed
     if(incomingByte == 122) {
       stepper_desired_position = stepper_current_pos - 100;
@@ -1479,10 +1489,32 @@ void stepper_move_with_keys() {
       DEBUG_PRINT("\n");
       return;
     }
-
-    stepper_move_to(stepper_desired_position,1);
+	
+    stepper_move_to(stepper_desired_position,1);*/
     //delay(2000);
-
+  }
+  Serial.print("\n"); 
+  if(data_pt && ((usr_data[data_pt-1]=='\r') || (usr_data[data_pt-1]=='\n')))
+  {
+  	Serial.print("[USER_INPUT]Data input end, data len=");  	
+  	Serial.print(data_pt);
+  	Serial.print("\n");
+  	usr_data[data_pt-1] = '\0';
+  	tok = strtok(usr_data,"=");
+  	Serial.print(tok);
+  	Serial.print("\n");
+  	if(!strcmp(tok,"TH"))
+  	{
+  		tok = strtok(NULL,";");
+  		Serial.print(tok);
+  		Serial.print("\n");
+  		value = atoi(tok);
+  		quality_thres = value;
+  		Serial.print("[USER_INPUT]Set quality threshold to:");    
+  		Serial.print(quality_thres);    
+  		Serial.print("\n");    
+  	}
+  	data_pt = 0;
   }
 }
 
@@ -1775,17 +1807,18 @@ int sweep_int_analysis(void)
   	  Serial.print("int:");
   	  Serial.print(t_int_current);
   	  Serial.print("\n");
-  	  delay(30);
+  	  delay(50);
   	}	
-  	if(best_result_quality>70)	//100 is good enough, no need to continue.
+  	if(best_result_quality>quality_thres)	//good enough, no need to continue.
   		break;
   }
   
-  if(best_result_quality<70)   //if quality is below 75, high chance it's point to far away, change the focus to infinity
+  if(best_result_quality<quality_thres)   //if quality is below 75, high chance it's point to far away, change the focus to infinity
   {	
   	Distance_running_avg(1000);  //! make infinity 1000
   	infinity_time = millis();
   	stepper_move_to(INF_POS,1);
+  	infinity_flag = 1;
   }	
   Serial.print("best_result_quality:");
   Serial.print(best_result_quality);
@@ -1809,9 +1842,9 @@ float Distance_running_avg(float dist)
 	
 	dist_ravg[dist_pt] = dist;  //! save distance result in a global array
 	dist_pt++;
-	dist_pt %= 5;
+	dist_pt %= RUN_AVG_LEN;
 	//Serial.print("dist0~4:");
-	for(char i=0; i<5; i++)     //! calculate running avg
+	for(char i=0; i<RUN_AVG_LEN; i++)     //! calculate running avg
 	{
 		count++;
 		dist_sum += dist_ravg[i];	
@@ -1829,9 +1862,8 @@ float Distance_running_avg(float dist)
  */
 unsigned char check_button(bool *button_proc)
 {
-	static unsigned char state_hold,button_state;
+	static unsigned char state_hold,button_state,special_key;
 	static unsigned long button_delay,button_time,dclick_delay,lpress_delay; 
-	static bool dclick,lpress;
 	unsigned char key_func = 0;
 	
 	button_time = millis();
@@ -1839,11 +1871,9 @@ unsigned char check_button(bool *button_proc)
 		return 0;
 	button_delay = button_time;
 	
-	Serial.print("checking key state\n");
 	switch(button_state)
 	{
 		case 0:		//!idle state
-			Serial.print("key idle!\n");
   				if(!digitalRead(BUTTON1_PIN))
   				{
   					state_hold++;
@@ -1873,9 +1903,9 @@ unsigned char check_button(bool *button_proc)
   					state_hold++;
   				}
   			
-  			if((button_time > (lpress_delay+500)) && !lpress)
+  			if((button_time > (lpress_delay+500)) && !special_key)
   			{
-  				lpress = 1;
+  				special_key = 2;
   				key_func = 3;  //! long press
   				Serial.print("RESULT:Long Press Detected!\n");	
   			}
@@ -1885,18 +1915,18 @@ unsigned char check_button(bool *button_proc)
   				state_hold = 0;
   				button_state = 2;		//! enter released state
   				
-  				if(!dclick)				//! if double click already detected, no need to track time
+  				if(!special_key)				//! if double click already detected, no need to track time
   					dclick_delay = button_time;
   			}
 			break;
 		case 2:		//! release state for double click detect
 			Serial.print("delay for double click detect!\n");				
-			if(lpress)   //! if long press detected, release part should not trigger function again
+			if(special_key==2)   //! if long press detected, release part should not trigger function again
 			{
-				lpress = 0;
+				special_key = 0;
 				button_state = 3;
 			}	
-			else if(button_time > (dclick_delay+200))	//! after 500ms without clicking, no double click
+			else if(button_time > (dclick_delay+400))	//! after 400ms without clicking, no double click
 			{
 				button_state = 3;
 				key_func = 1;				//! single press
@@ -1904,9 +1934,9 @@ unsigned char check_button(bool *button_proc)
 			}
 			else	//! for double click
 			{
-				if(dclick)	//! if it's double click
+				if(special_key==1)	//! if it's double click
 				{
-					dclick = 0;
+					special_key = 0;
   					button_state = 3;
 					key_func = 2;				//! double click
 					Serial.print("RESULT:Double Click Detected!\n");	
@@ -1928,7 +1958,7 @@ unsigned char check_button(bool *button_proc)
   						Serial.print("RESULT:second press Detected!\n");
   						state_hold = 0;
   						button_state = 1;
-  						dclick = 1;
+  						special_key = 1;  //! double click
 					}
 				}				
 			}
@@ -1939,6 +1969,7 @@ unsigned char check_button(bool *button_proc)
 			{
 				button_state = 0;		//! enter idle again
 				button_proc = 0;
+				Serial.print("key idle!\n");
 			}
 			break;
 		default:break;
@@ -1961,9 +1992,11 @@ bool button_func(bool *lock_motor_pos,unsigned char key_val)
 		{
 			*lock_motor_pos = 1;
 		}
-		else if(key_val == 2)  //! double press, lock at current position
+		else if(key_val == 2)  //! double press, lock at infinity
 		{
 			*lock_motor_pos = 1;
+			last_dist = 1000;
+			stepper_move_to(INF_POS,1);
 		}
 		else if(key_val == 3)  //! long press, lock at infinity
 		{
@@ -1985,7 +2018,7 @@ void loop() {
   int meas_quality;
   float temp_comp, dist_comp;
   static int pos_lookup=0;
-  unsigned long cur_time=0;
+  static unsigned long cur_time,measure_time;
   static uint8_t count=0,weak_sig_count=0;
   static bool button_proc = 0,lock_motor_pos = 0;
   unsigned char key_value=0;
@@ -2002,14 +2035,22 @@ void loop() {
   if(lock_motor_pos)
   	return;			//lock position until next button press
   	
-  Serial.print("out of locked state!\n");
+  cur_time = millis();	
+  if((cur_time - measure_time) < 150)	//! limit sampling rate
+  	return;
+  	
+  Serial.print("cur_time:");
+  Serial.print(cur_time);
+  Serial.print(" measure_time");
+  Serial.print(measure_time);
+  Serial.print("\n");
   reset_all_data();		//clear data arrays before every measurement
   // Take the measurement
 	 //measure_type = AMBIENT;
 	 //t_int_current = 10;
    measure_type = DISTANCE;
    recovery = rawMeasurement(measure_type);
-
+   measure_time = millis();
   if(!recovery) {
     // we have good data, so process it
     convertToPixelData();
@@ -2033,13 +2074,15 @@ void loop() {
       		if(weak_sig_count<4)
       		{
       			weak_sig_count++;
-      			delay(20);
       		}
       		else
       		{
-      			t_int_current = sweep_int_analysis();
-      			weak_sig_count = 0;
-      			Serial.print("WEAK ILLUMI\n");
+      			if(!infinity_flag)
+      			{
+      				t_int_current = sweep_int_analysis();
+      				weak_sig_count = 0;
+      				Serial.print("WEAK ILLUMI\n");
+      			}
       		}      					
       		break;
     	    
@@ -2059,19 +2102,19 @@ void loop() {
       //delay(250);
     default:
       
+      infinity_flag = 0;
       weak_sig_count = 0;
       
       averagePixelArray();
       calcDistance_avg();
 	  
 	  distance_avg = Distance_running_avg(distance_avg);  //! doing a running avg on distance, make it smoother
+	  
       count++;
-	  if(count>=5)      //! sample 5 times before moving the motor
+	  if(count>=3)      //! sample 3 times before moving the motor
 	  {
 	  	count = 0;
-	  	cur_time = millis();
-	  	Serial.print("5 samples done!\n");
-	  	if((abs(last_dist - distance_avg)>=0.01)&&(distance_avg<15))//&&((cur_time - infinity_time)>300))
+	  	if((abs(last_dist - distance_avg) >= distance_avg/50)&&(distance_avg<15)&&((measure_time - infinity_time)>300))
 	  	{
 	  		Serial.print("needs to move motor!\n");
 	  		last_dist = distance_avg;
@@ -2099,10 +2142,9 @@ void loop() {
 			Serial.print("\n");       		
       	}	       
 	  }     
-	  delay(50);	//! delay between each sample, prevent overheating
       // Uncomment to move with keys...
       #ifdef DEBUG
-       stepper_move_with_keys();
+       usr_input_serial();
       #endif
       
       for(int i=0; i<8; i++) {
