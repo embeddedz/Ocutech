@@ -278,8 +278,8 @@ bool pixel_validity[8][8] = {0};
 
 float avgDCS0, avgDCS1, avgDCS2, avgDCS3, avgDCS4;
 
-#define RUN_AVG_LEN 3
-float distance_avg,last_dist,arctan,dist_ravg[RUN_AVG_LEN];
+#define RUN_AVG_LEN 5
+float distance_avg,last_dist,arctan,dist_ravg[RUN_AVG_LEN],data_weight[5] = {0.1,0.2,0.3,0.4,4};
 char dist_pt;
 bool infinity_flag;
 /* temperature polynoms */
@@ -294,7 +294,7 @@ uint32_t TEMPRT=0;
 //float distance[8][8];
 float quality[8][8];
 float avg_quality;
-unsigned char quality_thres=70;
+unsigned char quality_thres=50;
 
 byte num_dcs_frames;
 bool measure_type;
@@ -1055,10 +1055,12 @@ QUALITY_INDICATOR evalQuality() {
   
   avg_quality /= 64;
 
-/*
+
   Serial.print("avg_quality:");
   Serial.print(avg_quality);
-  Serial.print("\n");*/
+  Serial.print(" integration time:");
+  Serial.print(t_int_current);
+  Serial.print("\n");
   
   //
   //Serial.print(", sufficient = ");
@@ -1380,7 +1382,17 @@ void stepper_move_to(int pos, bool force) {
     DEBUG_PRINT_STEPPER(pos);
     DEBUG_PRINT("\n");
     stepper_move_steps = stepper_current_pos - pos;
-
+	
+	//! change rpm for long distance moving
+	/*
+	if(stepper_move_steps > 200)
+	{
+		stepper.setRPM(60);
+	}
+	else
+	{
+		stepper.setRPM(35);
+	}	*/
     // Serial.print("stepper_move_steps = ");
     // Serial.println(stepper_move_steps);
     if (stepper_move_steps > mv_thres) {
@@ -1444,7 +1456,7 @@ void usr_input_serial() {
   unsigned char value;
   static unsigned char data_pt=0;
   
-  while(Serial.available() > 0) {
+  if(Serial.available() > 0) {
     usr_data[data_pt] = Serial.read();
     Serial.print(usr_data[data_pt++]); 
     data_pt %= 20;   
@@ -1819,6 +1831,7 @@ int sweep_int_analysis(void)
   	infinity_time = millis();
   	stepper_move_to(INF_POS,1);
   	infinity_flag = 1;
+  	Serial.print("[INTEG_SWEEP]:move to infinity!\n");
   }	
   Serial.print("best_result_quality:");
   Serial.print(best_result_quality);
@@ -1847,7 +1860,7 @@ float Distance_running_avg(float dist)
 	for(char i=0; i<RUN_AVG_LEN; i++)     //! calculate running avg
 	{
 		count++;
-		dist_sum += dist_ravg[i];	
+		dist_sum += dist_ravg[(dist_pt + i)%5]*data_weight[i];	
   		//Serial.print(dist_ravg[i]);  
 	}
 	//Serial.print(" avg_dist:");
@@ -2022,11 +2035,8 @@ void loop() {
   static uint8_t count=0,weak_sig_count=0;
   static bool button_proc = 0,lock_motor_pos = 0;
   unsigned char key_value=0;
-  //adjust_t_int_based_on_saturated();
-  #ifdef DEBUG
-  adjust_t_int_with_keys();
-  #endif
-	 
+  
+  //adjust_t_int_with_keys();
   //check button state
   if(key_value = check_button(&button_proc))
   {
@@ -2036,14 +2046,9 @@ void loop() {
   	return;			//lock position until next button press
   	
   cur_time = millis();	
-  if((cur_time - measure_time) < 150)	//! limit sampling rate
+  if((cur_time - measure_time) < 100)	//! limit sampling rate
   	return;
-  	
-  Serial.print("cur_time:");
-  Serial.print(cur_time);
-  Serial.print(" measure_time");
-  Serial.print(measure_time);
-  Serial.print("\n");
+    
   reset_all_data();		//clear data arrays before every measurement
   // Take the measurement
 	 //measure_type = AMBIENT;
@@ -2051,8 +2056,10 @@ void loop() {
    measure_type = DISTANCE;
    recovery = rawMeasurement(measure_type);
    measure_time = millis();
+   
   if(!recovery) {
     // we have good data, so process it
+    usr_input_serial();
     convertToPixelData();
 
     //print_DCS();
@@ -2077,7 +2084,7 @@ void loop() {
       		}
       		else
       		{
-      			if(!infinity_flag)
+      			if((measure_time - infinity_time)> 400)
       			{
       				t_int_current = sweep_int_analysis();
       				weak_sig_count = 0;
@@ -2114,7 +2121,7 @@ void loop() {
 	  if(count>=3)      //! sample 3 times before moving the motor
 	  {
 	  	count = 0;
-	  	if((abs(last_dist - distance_avg) >= distance_avg/50)&&(distance_avg<15)&&((measure_time - infinity_time)>300))
+	  	if((abs(last_dist - distance_avg) >= distance_avg/50)&&(distance_avg<15))//&&((measure_time - infinity_time)>200))
 	  	{
 	  		Serial.print("needs to move motor!\n");
 	  		last_dist = distance_avg;
@@ -2143,9 +2150,7 @@ void loop() {
       	}	       
 	  }     
       // Uncomment to move with keys...
-      #ifdef DEBUG
-       usr_input_serial();
-      #endif
+      
       
       for(int i=0; i<8; i++) {
         if(satPixels[i] != 0x00)
