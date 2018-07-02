@@ -219,11 +219,30 @@ const word t_int[16] = {
   T_INT_52600
 };
 
+const word int_rt[16] = {
+	0,
+	0,
+	0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  1,
+  3,
+  6,
+  13,
+  26,
+  52
+};
+
 byte t_int_current = 0; // initialize to 103 us
 
 #define UP         1
 #define DOWN       0
-#define MAX_T_INT 14
+#define MAX_T_INT 13
 #define MIN_T_INT  4
 
 const word t_int_delay_us[16] = {
@@ -279,7 +298,7 @@ bool pixel_validity[8][8] = {0};
 float avgDCS0, avgDCS1, avgDCS2, avgDCS3, avgDCS4;
 
 #define RUN_AVG_LEN 5
-float distance_avg,last_dist,arctan,dist_ravg[RUN_AVG_LEN],data_weight[5] = {0.1,0.2,0.3,0.4,4};
+float dist_comp,distance_avg,last_dist,arctan,dist_ravg[RUN_AVG_LEN],data_weight[5] = {0.1,0.2,0.3,0.4,4};
 char dist_pt;
 bool infinity_flag;
 /* temperature polynoms */
@@ -287,18 +306,18 @@ const int32_t epc610_temp_dist_off = 1430;
 const uint8_t epc610_temp_fract_bits[3] = { 22, 22, 12 };
 const int32_t epc610_temp_corr_fact[3] = { 11563, -20829295, 9117951 };
 
-int DCS[5][8][8];
-int temperature[5][8][2];
+int DCS[4][8][8];
+int temperature[4][8][2];
 uint32_t TEMPRT=0;
 
 //float distance[8][8];
 float quality[8][8];
 float avg_quality;
-unsigned char quality_thres=50;
+unsigned char quality_thres=75;
 
 byte num_dcs_frames;
 bool measure_type;
-word rawData[5][8][15];
+word rawData[4][8][15];
 byte satPixels[8]; // 8 bits in a byte correspond to 8 pixels
 
 /** buffers to send from and to receive to **/
@@ -330,7 +349,8 @@ float temp_comp_curve[100] = {0};
 // microstep control for DRV8834
 #define M0 18
 #define M1 19
-DRV8834 stepper(MOTOR_STEPS, DIR, STEP, M0, M1);
+#define ENABLE 0
+DRV8834 stepper(MOTOR_STEPS, DIR, STEP, ENABLE, M0, M1);
 
 //Uncomment line to use enable/disable functionality
 //BasicStepperDriver stepper(MOTOR_STEPS, DIR, STEP, ENBL);
@@ -338,13 +358,13 @@ DRV8834 stepper(MOTOR_STEPS, DIR, STEP, M0, M1);
 #define MAX_POS 1900
 #define HOME_POS 2400
 #define MIN_POS 0
-#define BACKLASH 35
+#define BACKLASH_P 35
+#define BACKLASH_N 35
 #define MV_TH		8
 #define MV_TH500    10
 #define MV_TH900    15
 #define MV_TH1100   25
 #define INF_POS	250
-// #define BACKLASH 0
 
 int stepper_current_pos = 0;
 int stepper_last_dir = 0;
@@ -502,7 +522,7 @@ STATUS setIntegrationTime(word t_int) {
   if(rcv == READ_IDLE) {
     rcv = sendEPC(WRITE_NOP);
     if(rcv == t_int) {
-      sendEPC(WRITE_NOP);   ////////////////////////////// in logic capture of eval sw
+      //sendEPC(WRITE_NOP);   ////////////////////////////// in logic capture of eval sw
       return SUCCESS;
     }
   }
@@ -517,25 +537,22 @@ STATUS setIntegrationTime(word t_int) {
 
 STATUS setMeasurementType(int type) {
 	word rcv=0,data_word;
-	
-	
+		
   if (type == DISTANCE) {
-  	data_word = ((0x10 << 14) | (0x02 << 8)) | 0x08;
-    rcv = sendEPC(data_word);
-    if(rcv == READ_IDLE) {
-    	sendEPC(WRITE_NOP);
+  	data_word = ((0x80 << 8) | (0x02 << 8)) | 0x08;
+    sendEPC(data_word);
+    rcv = sendEPC(WRITE_NOP);
     	if(rcv == data_word) {
-      sendEPC(WRITE_NOP);   
+      //sendEPC(WRITE_NOP);   
       return SUCCESS;
       }
       	
-		}
-		/*
-		while(1){
+		
+		
 		DEBUG_PRINT("meas type write err:rcv=");
 		DEBUG_PRINT(rcv);
-  	DEBUG_PRINT("\n");
-  	}*/
+  		DEBUG_PRINT("\n");
+  	
 		return ERR_UNKNOWN;
   }
   else if (type == AMBIENT) {
@@ -543,22 +560,20 @@ STATUS setMeasurementType(int type) {
     //sendEPC_cid_addr_data(0x10, 0x02, 0x38);
     //sendEPC(WRITE_NOP);
     //return SUCCESS;
-    data_word = ((0x10 << 14) | (0x02 << 8)) | 0x38;
-    rcv = sendEPC(data_word);
-    if(rcv == READ_IDLE) {
-    	sendEPC(WRITE_NOP);
+    data_word = ((0x80 << 8) | (0x02 << 8)) | 0x38;
+    sendEPC(data_word);
+    rcv = sendEPC(WRITE_NOP);
     	if(rcv == data_word) {
-      sendEPC(WRITE_NOP);   
+      //sendEPC(WRITE_NOP);   
       return SUCCESS;
       }
       
-		}
-		/*
-		while(1){
+		
+		
 		DEBUG_PRINT("meas type write err:rcv=");
 		DEBUG_PRINT(rcv);
   	DEBUG_PRINT("\n");
-  	}*/
+  	
 		return ERR_UNKNOWN;
   }
 }
@@ -771,7 +786,7 @@ float comp_temp(int temp,float dist) {
 
 //!version 2
 float comp_temp(int temp,float dist) {
-	float dist_temp,offset_drift,p2=6.61;//others:6.57, num 3: 6.61,	silver case: 6.43
+	float dist_temp,offset_drift,p2=6.67;//others:6.57, num 3: 6.67,	silver case: 6.43
 	
 	//if(dist>6)
 	//	dist = 6;
@@ -779,15 +794,11 @@ float comp_temp(int temp,float dist) {
 	//	dist = 0;
 	dist_temp = -0.0055*temp+p2+dist;
 			
-  /*
-  if(dist_temp>1.5){ //real distance > 1.2m, use p1=-0.0034
+  
+  if(dist_temp>0.45){ //real distance > 1.2m, use p1=-0.0034
   	
-  	dist_temp = -0.0055*temp+p2+dist;
-  	offset_drift = (dist_temp-1)/1 * 0.08; //offset_drift increases as real distance increases
-  	if(offset_drift>0.22)
-  		offset_drift = 0.22;
-  	dist_temp += offset_drift;
-  }*/
+  	dist_temp -= 0.03;
+  }
   
   //else if(dist_temp > 6)
   	//dist_temp = 6;
@@ -1031,6 +1042,7 @@ QUALITY_INDICATOR evalQuality() {
   avg_quality = 0;
   for(int i=0; i<8; i++) {
     for(int j=0; j<8; j++) {
+      
       if (quality[i][j] < quality_thres) {
         low++;
         pixel_validity[i][j] = 0;
@@ -1060,6 +1072,8 @@ QUALITY_INDICATOR evalQuality() {
   Serial.print(avg_quality);
   Serial.print(" integration time:");
   Serial.print(t_int_current);
+  Serial.print(" dist:");
+  Serial.print(dist_comp);
   Serial.print("\n");
   
   //
@@ -1228,7 +1242,7 @@ boolean rawMeasurement(int type) {
     num_dcs_frames = 4;
   }
   else if (type == AMBIENT) {
-    num_dcs_frames = 5;
+    num_dcs_frames = 4;
   }
 
   // these three commands must be done before every measurement sequence
@@ -1337,11 +1351,18 @@ int getStepperPositionViaLookupTable(float distance) {
  */
 void stepper_home() {
   // analogWrite(A12, (int)896);
+  
+  stepper.enable();
+  delay(1);
+  
   stepper.move(HOME_POS * MICROSTEPS);
   // analogWrite(A12, (int)1280);
   stepper.move(-HOME_OFFSET * MICROSTEPS);
   stepper_last_dir = 1;
   stepper_current_pos = 0;
+  
+  delay(10);
+  stepper.disable();
   return;
 }
 
@@ -1397,7 +1418,7 @@ void stepper_move_to(int pos, bool force) {
     // Serial.println(stepper_move_steps);
     if (stepper_move_steps > mv_thres) {
       if (stepper_last_dir == 0) {
-        stepper_move_steps += BACKLASH;
+        stepper_move_steps += BACKLASH_P;
         stepper_last_dir = 1;
         // Serial.print("new stepper_move_steps = ");
         // Serial.println(stepper_move_steps);
@@ -1405,7 +1426,7 @@ void stepper_move_to(int pos, bool force) {
     }
     else if (stepper_move_steps < -mv_thres) {
       if (stepper_last_dir == 1) {
-        stepper_move_steps -= BACKLASH;
+        stepper_move_steps -= BACKLASH_N;
         stepper_last_dir = 0;
         // Serial.print("new stepper_move_steps = ");
         // Serial.println(stepper_move_steps);
@@ -1416,12 +1437,12 @@ void stepper_move_to(int pos, bool force) {
       {
       	if ((stepper_last_dir == 0)&&(stepper_move_steps>0)) 
       	{
-        	stepper_move_steps += BACKLASH;
+        	stepper_move_steps += BACKLASH_P;
         	stepper_last_dir = 1;
       	}
       	else if((stepper_last_dir == 1)&&(stepper_move_steps<0))
       	{
-      		stepper_move_steps -= BACKLASH;
+      		stepper_move_steps -= BACKLASH_N;
         	stepper_last_dir = 0;
       	}
       }
@@ -1435,7 +1456,9 @@ void stepper_move_to(int pos, bool force) {
     // if ((stepper_move_steps < 0) & !stepper_last_dir){
     //   stepper_move_steps -= BACKLASH;
     // }
-
+    
+	stepper.enable();
+	delay(1);
     stepper.move(stepper_move_steps * MICROSTEPS);
 
     // if(stepper_move_steps < 0){
@@ -1446,7 +1469,9 @@ void stepper_move_to(int pos, bool force) {
     // }
 
     stepper_current_pos = pos;
-
+    
+    delay(10);
+	stepper.disable();
   return;
 }
 
@@ -1455,6 +1480,7 @@ void usr_input_serial() {
   char *tok;
   unsigned char value;
   static unsigned char data_pt=0;
+  int ret=0;
   
   if(Serial.available() > 0) {
     usr_data[data_pt] = Serial.read();
@@ -1501,7 +1527,6 @@ void usr_input_serial() {
       DEBUG_PRINT("\n");
       return;
     }
-	
     stepper_move_to(stepper_desired_position,1);*/
     //delay(2000);
   }
@@ -1515,6 +1540,7 @@ void usr_input_serial() {
   	tok = strtok(usr_data,"=");
   	Serial.print(tok);
   	Serial.print("\n");
+  	
   	if(!strcmp(tok,"TH"))
   	{
   		tok = strtok(NULL,";");
@@ -1523,8 +1549,19 @@ void usr_input_serial() {
   		value = atoi(tok);
   		quality_thres = value;
   		Serial.print("[USER_INPUT]Set quality threshold to:");    
-  		Serial.print(quality_thres);    
+  		Serial.print(value);    
   		Serial.print("\n");    
+  	}
+  	else if(!strcmp(tok,"INT"))
+  	{
+  		tok = strtok(NULL,";");
+  		Serial.print(tok);
+  		Serial.print("\n");
+  		value = atoi(tok);
+  		t_int_current = value;
+  		Serial.print("[USER_INPUT]Set integration time to:");    
+  		Serial.print(value);    
+  		Serial.print("\n");   
   	}
   	data_pt = 0;
   }
@@ -1553,8 +1590,8 @@ void setup() {
   pinMode (EPC_LED_HIGH_ENABLE, OUTPUT);
 
   digitalWrite (EPC_SS_PIN, HIGH);
-  digitalWrite (EPC_LED_LOW_ENABLE, LOW);   //HIGH = enable
-  digitalWrite (EPC_LED_HIGH_ENABLE,HIGH);
+  digitalWrite (EPC_LED_LOW_ENABLE, HIGH);   //this one HIGH = enable high current
+  digitalWrite (EPC_LED_HIGH_ENABLE,LOW);
 
   // delay(5000); // wait 1 sec for EPC610 to be fully powered up
 
@@ -1571,8 +1608,6 @@ void setup() {
   stepper.setMicrostep(MICROSTEPS);
   stepper.setRPM(35);
   stepper_home();
-
-
 /*float dist = (C_LIGHT / (4 * PI_PRECISE * F_LED_HZ)) *
                            (PI_PRECISE +
                             atan2(-348+51, -279+108)) +
@@ -1785,13 +1820,13 @@ void record_temp_curve(int temp,float dist)
 int sweep_int_analysis(void)
 {
 	bool recovery = false;
-	int best_int=MAX_T_INT;
+	int best_int=MAX_T_INT,meas_quality;
 	float best_result_quality=0;
 	
 	for(int i=MIN_T_INT; i<= MAX_T_INT; i++){
 		
 		t_int_current = i;
-		measure_type = DISTANCE;
+		measure_type = DISTANCE;//AMBIENT;
   	recovery = rawMeasurement(measure_type);
   	
   	if(!recovery) {
@@ -1807,7 +1842,7 @@ int sweep_int_analysis(void)
   	  calcQuality();
   	  // calcTemperature();
   	
-  	  evalQuality();
+  	  meas_quality = evalQuality();
   	  
   	  if(avg_quality>best_result_quality){
   	  	best_result_quality = avg_quality;
@@ -1819,15 +1854,16 @@ int sweep_int_analysis(void)
   	  Serial.print("int:");
   	  Serial.print(t_int_current);
   	  Serial.print("\n");
-  	  delay(50);
+  	  delay(int_rt[t_int_current]+30);
   	}	
-  	if(best_result_quality>quality_thres)	//good enough, no need to continue.
+  	if(best_result_quality>400)	//good enough, no need to continue.
   		break;
   }
   
-  if(best_result_quality<quality_thres)   //if quality is below 75, high chance it's point to far away, change the focus to infinity
+  if(meas_quality == WEAK_ILLUMINATION)//best_result_quality<quality_thres)   //if quality is below 75, high chance it's point to far away, change the focus to infinity
   {	
-  	Distance_running_avg(1000);  //! make infinity 1000
+  	//Distance_running_avg(20);  //! make infinity 20
+  	last_dist = 1000; //infinity
   	infinity_time = millis();
   	stepper_move_to(INF_POS,1);
   	infinity_flag = 1;
@@ -2029,7 +2065,7 @@ void loop() {
   bool recovery = false;
   // char buffer[50];
   int meas_quality;
-  float temp_comp, dist_comp;
+  float temp_comp;
   static int pos_lookup=0;
   static unsigned long cur_time,measure_time;
   static uint8_t count=0,weak_sig_count=0;
@@ -2046,14 +2082,13 @@ void loop() {
   	return;			//lock position until next button press
   	
   cur_time = millis();	
-  if((cur_time - measure_time) < 100)	//! limit sampling rate
+  if((cur_time - measure_time) < 80)	//! limit sampling rate
   	return;
     
-  reset_all_data();		//clear data arrays before every measurement
+  reset_all_data();		//clear data arrays before each measurement
   // Take the measurement
-	 //measure_type = AMBIENT;
-	 //t_int_current = 10;
-   measure_type = DISTANCE;
+	
+   measure_type = DISTANCE;//AMBIENT;
    recovery = rawMeasurement(measure_type);
    measure_time = millis();
    
@@ -2063,16 +2098,13 @@ void loop() {
     convertToPixelData();
 
     //print_DCS();
-		//print_temperature();
-		
-    // calcDistance(); // full array distance calculation
-    
+
     //this is where pixel validity starts to make difference in calculation
     calcQuality();
-    // calcTemperature();
 
     meas_quality = evalQuality();
-    	
+    //print_quality();
+    
 		switch(meas_quality)
 		{
 			
@@ -2084,13 +2116,14 @@ void loop() {
       		}
       		else
       		{
-      			if((measure_time - infinity_time)> 400)
+      			if((measure_time - infinity_time)> 500)
       			{
       				t_int_current = sweep_int_analysis();
       				weak_sig_count = 0;
-      				Serial.print("WEAK ILLUMI\n");
+      				
       			}
-      		}      					
+      		}      		
+      		Serial.print("WEAK ILLUMI\n");			
       		break;
     	    
     case HIGH_ILLUMINATION:
@@ -2121,7 +2154,7 @@ void loop() {
 	  if(count>=3)      //! sample 3 times before moving the motor
 	  {
 	  	count = 0;
-	  	if((abs(last_dist - distance_avg) >= distance_avg/50)&&(distance_avg<15))//&&((measure_time - infinity_time)>200))
+	  	if((abs(last_dist - distance_avg) >= distance_avg/50)&&(distance_avg<20))//&&((measure_time - infinity_time)>200))
 	  	{
 	  		Serial.print("needs to move motor!\n");
 	  		last_dist = distance_avg;
@@ -2164,5 +2197,4 @@ void loop() {
     recovery_sequence();
     DEBUG_PRINT("Recovered.\n\n");
   }
-
 }
