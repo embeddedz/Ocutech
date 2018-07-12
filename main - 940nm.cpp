@@ -354,7 +354,7 @@ DRV8834 stepper(MOTOR_STEPS, DIR, STEP, ENABLE, M0, M1);
 
 //Uncomment line to use enable/disable functionality
 //BasicStepperDriver stepper(MOTOR_STEPS, DIR, STEP, ENBL);
-#define HOME_OFFSET 50
+#define HOME_OFFSET 50//50
 #define MAX_POS 1900
 #define HOME_POS 2400
 #define MIN_POS 0
@@ -786,7 +786,7 @@ float comp_temp(int temp,float dist) {
 
 //!version 2
 float comp_temp(int temp,float dist) {
-	float dist_temp,offset_drift,p2=6.67;//others:6.57, num 3: 6.67,	silver case: 6.43
+	float dist_temp,offset_drift,p2=6.55;//others:6.57, num 3: 6.67,	silver case: 6.43, golden case:6.55
 	
 	//if(dist>6)
 	//	dist = 6;
@@ -795,9 +795,9 @@ float comp_temp(int temp,float dist) {
 	dist_temp = -0.0055*temp+p2+dist;
 			
   
-  if(dist_temp>0.45){ //real distance > 1.2m, use p1=-0.0034
+  if(dist_temp>0.34){ //real distance > 1.2m, use p1=-0.0034
   	
-  	dist_temp -= 0.03;
+  	dist_temp += 0.04;
   }
   
   //else if(dist_temp > 6)
@@ -1086,14 +1086,17 @@ QUALITY_INDICATOR evalQuality() {
   //Serial.print(", high = ");
   //Serial.println(high);
 
-  if (low >= majority){
+  if (avg_quality<=quality_thres)//low >= majority)
+  {
     // Serial.println("Increase integration time.");
     ret = WEAK_ILLUMINATION;
   }
-  else if (high >= majority){
+  else if (avg_quality>=1000)//high >= majority)
+  {
     // Serial.println("Decrease integration time.");
     ret = HIGH_ILLUMINATION;
   }
+  /*
   else if (sufficient >= majority){
     // Serial.println("Increase integration time.");
     // ret = WEAK_ILLUMINATION;
@@ -1106,7 +1109,7 @@ QUALITY_INDICATOR evalQuality() {
   else{
     // Serial.println("Unclear which way to change integration time.");
     ret = WEAK_ILLUMINATION;
-  }
+  }*/
 
   return ret;
 }
@@ -1854,7 +1857,7 @@ int sweep_int_analysis(void)
   	  Serial.print("int:");
   	  Serial.print(t_int_current);
   	  Serial.print("\n");
-  	  delay(int_rt[t_int_current]+30);
+  	  delay(int_rt[t_int_current]+20);
   	}	
   	if(best_result_quality>400)	//good enough, no need to continue.
   		break;
@@ -2082,7 +2085,7 @@ void loop() {
   	return;			//lock position until next button press
   	
   cur_time = millis();	
-  if((cur_time - measure_time) < 80)	//! limit sampling rate
+  if((cur_time - measure_time) < 50)	//! limit sampling rate
   	return;
     
   reset_all_data();		//clear data arrays before each measurement
@@ -2094,7 +2097,7 @@ void loop() {
    
   if(!recovery) {
     // we have good data, so process it
-    usr_input_serial();
+    usr_input_serial();			//process user input from serial port
     convertToPixelData();
 
     //print_DCS();
@@ -2116,7 +2119,7 @@ void loop() {
       		}
       		else
       		{
-      			if((measure_time - infinity_time)> 500)
+      			if((measure_time - infinity_time)> 200)
       			{
       				t_int_current = sweep_int_analysis();
       				weak_sig_count = 0;
@@ -2182,9 +2185,7 @@ void loop() {
 			Serial.print("\n");       		
       	}	       
 	  }     
-      // Uncomment to move with keys...
-      
-      
+           
       for(int i=0; i<8; i++) {
         if(satPixels[i] != 0x00)
           DEBUG_PRINT("Some pixels are saturated\n");
